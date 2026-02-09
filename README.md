@@ -43,6 +43,20 @@ Response (`201`):
 }
 ```
 
+Response (`409`) cuando el tenant ya está provisionado:
+
+```json
+{
+  "error": "tenant \"acme\" is already provisioned",
+  "resource_id": "<existing_container_id>"
+}
+```
+
+Notas:
+
+- `tenant_id` se usa como label Docker para trazabilidad (`tenant_id=<value>`).
+- `db_secret_path` usa nombre canónico/sanitizado del tenant.
+
 ### Deprovision
 
 `DELETE /api/v1/provision/resources/:resource_id` o

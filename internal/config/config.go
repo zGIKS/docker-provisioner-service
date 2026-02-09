@@ -12,6 +12,12 @@ type Config struct {
 	Port                 string
 	DockerBin            string
 	DockerCommandTimeout time.Duration
+	HTTPReadTimeout      time.Duration
+	HTTPWriteTimeout     time.Duration
+	HTTPIdleTimeout      time.Duration
+	HTTPBodyLimitBytes   int
+	RateLimitMax         int
+	RateLimitWindow      time.Duration
 	TenantDBImage        string
 	TenantDBNetwork      string
 	TenantDBHost         string
@@ -52,6 +58,38 @@ func Load() (Config, error) {
 		return cfg, err
 	}
 
+	httpReadTimeoutSec, err := parseInt64Env("HTTP_READ_TIMEOUT_SECONDS")
+	if err != nil {
+		return cfg, err
+	}
+	httpWriteTimeoutSec, err := parseInt64Env("HTTP_WRITE_TIMEOUT_SECONDS")
+	if err != nil {
+		return cfg, err
+	}
+	httpIdleTimeoutSec, err := parseInt64Env("HTTP_IDLE_TIMEOUT_SECONDS")
+	if err != nil {
+		return cfg, err
+	}
+	httpBodyLimitBytes, err := parseIntEnv("HTTP_BODY_LIMIT_BYTES")
+	if err != nil {
+		return cfg, err
+	}
+	rateLimitMax, err := parseIntEnv("HTTP_RATE_LIMIT_MAX")
+	if err != nil {
+		return cfg, err
+	}
+	rateLimitWindowSec, err := parseInt64Env("HTTP_RATE_LIMIT_WINDOW_SECONDS")
+	if err != nil {
+		return cfg, err
+	}
+
+	cfg.HTTPReadTimeout = withDefaultDurationSeconds(httpReadTimeoutSec, 10)
+	cfg.HTTPWriteTimeout = withDefaultDurationSeconds(httpWriteTimeoutSec, 30)
+	cfg.HTTPIdleTimeout = withDefaultDurationSeconds(httpIdleTimeoutSec, 60)
+	cfg.HTTPBodyLimitBytes = withDefaultInt(httpBodyLimitBytes, 1024*1024)
+	cfg.RateLimitMax = withDefaultInt(rateLimitMax, 60)
+	cfg.RateLimitWindow = withDefaultDurationSeconds(rateLimitWindowSec, 60)
+
 	return cfg, nil
 }
 
@@ -79,10 +117,36 @@ func parseFloat64Env(key string) (*float64, error) {
 	return &parsed, nil
 }
 
+func parseIntEnv(key string) (*int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return nil, nil
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be int", key)
+	}
+	return &parsed, nil
+}
+
 func getEnv(key, fallback string) string {
 	v := strings.TrimSpace(os.Getenv(key))
 	if v == "" {
 		return fallback
 	}
 	return v
+}
+
+func withDefaultDurationSeconds(value *int64, defaultSeconds int64) time.Duration {
+	if value == nil {
+		return time.Duration(defaultSeconds) * time.Second
+	}
+	return time.Duration(*value) * time.Second
+}
+
+func withDefaultInt(value *int, defaultValue int) int {
+	if value == nil {
+		return defaultValue
+	}
+	return *value
 }

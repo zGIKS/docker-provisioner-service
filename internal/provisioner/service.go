@@ -17,6 +17,15 @@ var (
 	ErrInvalidResource = errors.New("resource_id is required")
 )
 
+type ErrAlreadyProvisioned struct {
+	TenantName string
+	ResourceID string
+}
+
+func (e *ErrAlreadyProvisioned) Error() string {
+	return fmt.Sprintf("tenant %q is already provisioned", e.TenantName)
+}
+
 type DockerRunner interface {
 	Run(ctx context.Context, args ...string) (string, error)
 }
@@ -50,9 +59,22 @@ func NewService(runner DockerRunner, cfg config.Config) *Service {
 
 func (s *Service) ProvisionTenant(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
 	tenantName := strings.TrimSpace(req.TenantName)
+	tenantID := strings.TrimSpace(req.TenantID)
 	safeTenantName := normalizeTenantName(tenantName)
 	if safeTenantName == "" {
 		return ProvisionResult{}, ErrInvalidTenant
+	}
+
+	containerName := "tenant-db-" + safeTenantName
+	existingResourceID, err := s.lookupContainerID(ctx, containerName)
+	if err != nil {
+		return ProvisionResult{}, err
+	}
+	if existingResourceID != "" {
+		return ProvisionResult{}, &ErrAlreadyProvisioned{
+			TenantName: safeTenantName,
+			ResourceID: existingResourceID,
+		}
 	}
 
 	if err := s.ensureNetwork(ctx); err != nil {
@@ -64,7 +86,6 @@ func (s *Service) ProvisionTenant(ctx context.Context, req ProvisionRequest) (Pr
 	}
 
 	dbName := s.cfg.TenantDBNamePrefix + safeTenantName
-	containerName := "tenant-db-" + safeTenantName
 
 	password, err := generatePassword(32)
 	if err != nil {
@@ -86,10 +107,15 @@ func (s *Service) ProvisionTenant(ctx context.Context, req ProvisionRequest) (Pr
 		"run", "-d",
 		"--name", containerName,
 		"--network", s.cfg.TenantDBNetwork,
+		"--label", "managed_by=iam-provisioner",
+		"--label", "tenant_name=" + safeTenantName,
 		"-e", "POSTGRES_USER=" + s.cfg.TenantDBUser,
 		"-e", "POSTGRES_PASSWORD=" + password,
 		"-e", "POSTGRES_DB=" + dbName,
 		"-p", "0:5432",
+	}
+	if tenantID != "" {
+		args = append(args, "--label", "tenant_id="+tenantID)
 	}
 
 	if memoryMB != nil && *memoryMB > 0 {
@@ -132,7 +158,7 @@ func (s *Service) ProvisionTenant(ctx context.Context, req ProvisionRequest) (Pr
 		Status:           "provisioned",
 		ResourceID:       containerID,
 		ConnectionString: connectionString,
-		DBSecretPath:     fmt.Sprintf("tenants/%s/db", tenantName),
+		DBSecretPath:     fmt.Sprintf("tenants/%s/db", safeTenantName),
 	}, nil
 }
 
@@ -164,6 +190,17 @@ func (s *Service) ensureNetwork(ctx context.Context) error {
 func (s *Service) pullImage(ctx context.Context) error {
 	_, err := s.runner.Run(ctx, "pull", s.cfg.TenantDBImage)
 	return err
+}
+
+func (s *Service) lookupContainerID(ctx context.Context, containerName string) (string, error) {
+	out, err := s.runner.Run(ctx, "inspect", "--type", "container", "--format", "{{.Id}}", containerName)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such object") || strings.Contains(err.Error(), "No such container") {
+			return "", nil
+		}
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func normalizeTenantName(tenantName string) string {

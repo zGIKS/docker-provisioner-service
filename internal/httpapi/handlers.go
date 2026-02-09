@@ -20,7 +20,8 @@ type deprovisionRequest struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
+	Error      string `json:"error"`
+	ResourceID string `json:"resource_id,omitempty"`
 }
 
 func NewHandler(service *provisioner.Service) *Handler {
@@ -54,7 +55,20 @@ func (h *Handler) provisionTenant(c *fiber.Ctx) error {
 		if errors.Is(err, provisioner.ErrInvalidTenant) {
 			return writeError(c, fiber.StatusBadRequest, err.Error())
 		}
-		log.Printf("provision failed for tenant=%q: %v", req.TenantName, err)
+		var alreadyProvisioned *provisioner.ErrAlreadyProvisioned
+		if errors.As(err, &alreadyProvisioned) {
+			return c.Status(fiber.StatusConflict).JSON(errorResponse{
+				Error:      alreadyProvisioned.Error(),
+				ResourceID: alreadyProvisioned.ResourceID,
+			})
+		}
+		log.Printf(
+			"provision failed request_id=%q tenant=%q tenant_id=%q: %v",
+			c.Get("X-Request-ID"),
+			req.TenantName,
+			req.TenantID,
+			err,
+		)
 		return writeError(c, fiber.StatusInternalServerError, "failed to provision tenant database")
 	}
 
@@ -84,7 +98,12 @@ func (h *Handler) deprovision(c *fiber.Ctx, resourceID string) error {
 		if errors.Is(err, provisioner.ErrInvalidResource) {
 			return writeError(c, fiber.StatusBadRequest, err.Error())
 		}
-		log.Printf("deprovision failed for resource=%q: %v", resourceID, err)
+		log.Printf(
+			"deprovision failed request_id=%q resource=%q: %v",
+			c.Get("X-Request-ID"),
+			resourceID,
+			err,
+		)
 		return writeError(c, fiber.StatusInternalServerError, "failed to deprovision resource")
 	}
 
